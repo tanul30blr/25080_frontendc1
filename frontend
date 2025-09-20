@@ -1,0 +1,164 @@
+import streamlit as st
+from datetime import datetime
+import backend_pms as be
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Startup PMS",
+    page_icon="🚀",
+    layout="wide"
+)
+
+# --- STYLING ---
+st.markdown("""
+<style>
+    .stExpander {
+        border: 1px solid #2e3b4e;
+        border-radius: 10px;
+    }
+    .stForm {
+        border: 1px solid #4a5568;
+        border-radius: 10px;
+        padding: 15px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🚀 Simple Performance Management System")
+
+# --- USER SELECTION (Simulating Login) ---
+st.sidebar.header("Select User")
+all_users = be.get_users()
+user_options = {f"{user['full_name']} ({user['role']})": user for user in all_users}
+selected_user_display = st.sidebar.selectbox("Log in as:", user_options.keys())
+current_user = user_options[selected_user_display]
+
+st.sidebar.info(f"Logged in as: *{current_user['full_name']}*")
+st.sidebar.write(f"Role: *{current_user['role']}*")
+
+# --- MAIN APP LAYOUT ---
+if current_user['role'] == 'Manager':
+    # --- MANAGER VIEW ---
+    st.header("Manager Dashboard")
+    manager_id = current_user['user_id']
+    employees = be.get_employees_for_manager(manager_id)
+    
+    if not employees:
+        st.warning("You do not have any employees assigned to you.")
+    else:
+        employee_options = {emp['full_name']: emp['user_id'] for emp in employees}
+        selected_employee_name = st.selectbox("Select an employee to manage:", employee_options.keys())
+        selected_employee_id = employee_options[selected_employee_name]
+
+        tab1, tab2 = st.tabs(["🎯 Goals & Tasks", "📈 Performance History"])
+
+        with tab1:
+            # Create a new goal
+            with st.expander("Create New Goal", expanded=False):
+                with st.form("new_goal_form", clear_on_submit=True):
+                    st.write(f"Setting goal for: *{selected_employee_name}*")
+                    goal_desc = st.text_area("Goal Description")
+                    goal_due = st.date_input("Due Date", min_value=datetime.today())
+                    if st.form_submit_button("Set Goal"):
+                        be.create_goal(selected_employee_id, manager_id, goal_desc, goal_due)
+                        st.success("Goal created successfully!")
+                        st.rerun()
+
+            # Display existing goals for the selected employee
+            st.subheader(f"Active Goals for {selected_employee_name}")
+            employee_goals = be.get_goals_for_employee(selected_employee_id)
+            for goal in employee_goals:
+                with st.expander(f"*{goal['description']}* (Due: {goal['due_date']}) - Status: {goal['status']}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        # Manager can update goal status
+                        st.write("Manager Actions")
+                        new_status = st.selectbox("Update Goal Status", ['Draft', 'In Progress', 'Completed', 'Cancelled'],
+                                                  index=['Draft', 'In Progress', 'Completed', 'Cancelled'].index(goal['status']),
+                                                  key=f"status_{goal['goal_id']}")
+                        if st.button("Save Status", key=f"save_{goal['goal_id']}"):
+                            be.update_goal_status(goal['goal_id'], new_status, manager_id)
+                            st.success("Status updated!")
+                            st.rerun()
+
+                        # Manager adds feedback
+                        with st.form(f"feedback_form_{goal['goal_id']}", clear_on_submit=True):
+                            feedback_text = st.text_area("Provide Feedback")
+                            if st.form_submit_button("Submit Feedback"):
+                                be.add_feedback(goal['goal_id'], manager_id, feedback_text)
+                                st.success("Feedback submitted!")
+                                st.rerun()
+
+                    with col2:
+                        # View tasks and approve them
+                        st.write("Tasks Logged by Employee")
+                        tasks = be.get_tasks_for_goal(goal['goal_id'])
+                        if not tasks: st.info("No tasks logged yet.")
+                        for task in tasks:
+                            if task['status'] == 'Pending Approval':
+                                st.write(f"• {task['description']} ({task['status']})")
+                                if st.button("Approve Task", key=f"approve_{task['task_id']}"):
+                                    be.update_task_status(task['task_id'], 'Approved')
+                                    st.rerun()
+                            else:
+                                st.write(f"• {task['description']} ({task['status']})")
+                        
+                        # View feedback
+                        st.write("Feedback History")
+                        feedback_items = be.get_feedback_for_goal(goal['goal_id'])
+                        for item in feedback_items:
+                            prefix = "🤖" if item['is_automated'] else "🗣️"
+                            st.info(f"{prefix} {item['feedback_text']} ({item['feedback_date'].strftime('%Y-%m-%d')})")
+
+
+        with tab2:
+            st.subheader(f"Performance History for {selected_employee_name}")
+            history = be.get_performance_history(selected_employee_id)
+            for item in history:
+                goal = item['goal']
+                feedback = item['feedback']
+                st.markdown(f"#### Goal: {goal['description']}")
+                st.markdown(f"*Status:* {goal['status']} | *Due Date:* {goal['due_date']}")
+                for fb in feedback:
+                    prefix = "🤖 *System:" if fb['is_automated'] else "🗣️ **Manager Feedback:*"
+                    st.info(f"{prefix} {fb['feedback_text']} (on {fb['feedback_date'].strftime('%Y-%m-%d')})")
+                st.markdown("---")
+
+
+elif current_user['role'] == 'Employee':
+    # --- EMPLOYEE VIEW ---
+    st.header("My Performance Dashboard")
+    employee_id = current_user['user_id']
+    my_goals = be.get_goals_for_employee(employee_id)
+
+    if not my_goals:
+        st.info("Your manager has not set any goals for you yet.")
+    else:
+        for goal in my_goals:
+            with st.expander(f"*{goal['description']}* (Due: {goal['due_date']}) - Status: {goal['status']}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Log a new task
+                    st.write("Log a New Task")
+                    with st.form(f"task_form_{goal['goal_id']}", clear_on_submit=True):
+                        task_desc = st.text_area("Task Description", key=f"desc_{goal['goal_id']}")
+                        if st.form_submit_button("Log Task"):
+                            be.create_task(goal['goal_id'], employee_id, task_desc)
+                            st.success("Task submitted for approval!")
+                            st.rerun()
+
+                with col2:
+                    # View my tasks
+                    st.write("My Tasks")
+                    tasks = be.get_tasks_for_goal(goal['goal_id'])
+                    if not tasks: st.info("You haven't logged any tasks for this goal.")
+                    for task in tasks:
+                        st.markdown(f"- {task['description']} ({task['status']})")
+
+                # View feedback for this goal
+                st.write("Manager Feedback")
+                feedback_items = be.get_feedback_for_goal(goal['goal_id'])
+                if not feedback_items: st.info("No feedback yet.")
+                for item in feedback_items:
+                    prefix = "🤖" if item['is_automated'] else "🗣️"
+                    st.info(f"{prefix} {item['feedback_text']} ({item['feedback_date'].strftime('%Y-%m-%d')})")
